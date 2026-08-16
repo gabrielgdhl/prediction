@@ -1,100 +1,250 @@
 import numpy as np
 import pandas as pd
+
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.multioutput import MultiOutputClassifier
+
+from dados import carregar_resultados
 from features import GeradorEstatisticasAvancadas
 
-def carregar_dados(caminho_csv):
-    """
-    Espera um CSV onde cada linha é um concurso e as colunas contêm as 15 dezenas sorteadas.
-    Ajuste os nomes das colunas conforme o seu CSV real.
-    """
-    df = pd.read_csv(caminho_csv)
-    # Exemplo assumindo colunas de B1 a B15 ou similar
-    colunas_bolas = [col for col in df.columns if 'bola' in col.lower() or 'dezena' in col.lower() or col.startswith('B')]
-    if not colunas_bolas:
-        # Se as primeiras 15 colunas forem os números
-        colunas_bolas = df.columns[1:16]
-    
-    return df[colunas_bolas]
 
-def gerar_jogos_otimizados(exclusoes_previstas, qtd_jogos=3, tamanho_jogo=15):
+def treinar_modelo(X, y):
+    print("Treinando modelo de Machine Learning...")
+
+    modelo = MultiOutputClassifier(
+        RandomForestClassifier(
+            n_estimators=300,
+            max_depth=8,
+            min_samples_leaf=5,
+            random_state=42,
+            n_jobs=-1,
+            class_weight="balanced"
+        )
+    )
+
+    modelo.fit(X, y)
+
+    return modelo
+
+
+def obter_probabilidade_nao_sair(modelo, features):
     """
-    Gera combinações de jogos de 15 dezenas excluindo as piores apontadas pelo ML.
+    Retorna um ranking das 25 dezenas
+    pela probabilidade de NÃO serem sorteadas.
     """
-    todas_dezenas = set(range(1, 26))
-    dezenas_disponiveis = list(todas_dezenas - set(exclusoes_previstas))
-    
-    jogos = []
-    np.random.seed(42)
-    
-    for _ in range(qtd_jogos):
-        # Seleciona aleatoriamente dentro do pool limpo e ordena
-        jogo = sorted(np.random.choice(dezenas_disponiveis, size=tamanho_jogo, replace=False))
-        jogos.append(jogo)
-        
-    return jogos
+
+    features = features.reshape(1, -1)
+
+    probabilidades = modelo.predict_proba(features)
+
+    ranking = []
+
+    for indice_dezena in range(25):
+
+        classes = modelo.estimators_[indice_dezena].classes_
+
+        probs = probabilidades[indice_dezena][0]
+
+        if 0 in classes:
+            indice_classe_zero = np.where(classes == 0)[0][0]
+            prob_nao_sair = probs[indice_classe_zero]
+        else:
+            prob_nao_sair = 0.0
+
+        ranking.append({
+            "dezena": indice_dezena + 1,
+            "prob_nao_sair": float(prob_nao_sair)
+        })
+
+    ranking.sort(
+        key=lambda item: item["prob_nao_sair"],
+        reverse=True
+    )
+
+    return ranking
+
+
+def selecionar_exclusoes(ranking, quantidade=7):
+    exclusoes = [
+        item["dezena"]
+        for item in ranking[:quantidade]
+    ]
+
+    return sorted(exclusoes)
+
+
+def mostrar_ranking(ranking):
+    print()
+    print("=" * 50)
+    print("RANKING DE PROBABILIDADE DE NÃO SAIR")
+    print("=" * 50)
+
+    for posicao, item in enumerate(ranking, start=1):
+
+        print(
+            f"{posicao:02d}º | "
+            f"Dezena {item['dezena']:02d} | "
+            f"P(não sair): "
+            f"{item['prob_nao_sair']:.4f}"
+        )
+
+
+def main():
+    print("=" * 60)
+    print("LOTOFÁCIL - MODELO PREDITIVO DE EXCLUSÃO")
+    print("=" * 60)
+
+    # ========================================================
+    # 1. CARREGAR DADOS
+    # ========================================================
+
+    print()
+    print("1. Carregando dados históricos da Lotofácil...")
+
+    try:
+
+        df, df_bolas = carregar_resultados()
+
+        print(
+            f"-> Total de concursos carregados: "
+            f"{len(df_bolas)}"
+        )
+
+    except Exception as e:
+
+        print(
+            f"Erro ao carregar os dados: {e}"
+        )
+
+        return
+
+    # ========================================================
+    # 2. GERAR FEATURES
+    # ========================================================
+
+    print()
+    print(
+        "2. Inicializando Engenharia "
+        "de Features Estatísticas..."
+    )
+
+    gerador = GeradorEstatisticasAvancadas(
+        df_bolas
+    )
+
+    print(
+        f"-> Total de concursos: "
+        f"{gerador.total_sorteios}"
+    )
+
+    # ========================================================
+    # 3. CRIAR DATASET
+    # ========================================================
+
+    print()
+    print(
+        "3. Construindo dataset de treinamento..."
+    )
+
+    X, y, indices = gerador.construir_dataset_ml(
+        janela_minima=200
+    )
+
+    print(
+        f"-> X.shape: {X.shape}"
+    )
+
+    print(
+        f"-> y.shape: {y.shape}"
+    )
+
+    # ========================================================
+    # 4. TREINAR MODELO
+    # ========================================================
+
+    print()
+    print(
+        "4. Treinando modelo..."
+    )
+
+    modelo = treinar_modelo(
+        X,
+        y
+    )
+
+    print(
+        "-> Modelo treinado."
+    )
+
+    # ========================================================
+    # 5. FEATURES DO PRÓXIMO CONCURSO
+    # ========================================================
+
+    print()
+    print(
+        "5. Gerando features para "
+        "o próximo concurso..."
+    )
+
+    features_proximo = (
+        gerador.features_proximo_concurso()
+    )
+
+    # ========================================================
+    # 6. RANKING
+    # ========================================================
+
+    ranking = obter_probabilidade_nao_sair(
+        modelo,
+        features_proximo
+    )
+
+    mostrar_ranking(
+        ranking
+    )
+
+    # ========================================================
+    # 7. SELECIONAR 7 EXCLUSÕES
+    # ========================================================
+
+    exclusoes = selecionar_exclusoes(
+        ranking,
+        quantidade=7
+    )
+
+    todas_dezenas = set(
+        range(1, 26)
+    )
+
+    candidatas = sorted(
+        todas_dezenas
+        - set(exclusoes)
+    )
+
+    print()
+    print("=" * 50)
+    print("7 DEZENAS PARA EXCLUSÃO")
+    print("=" * 50)
+
+    print(
+        " ".join(
+            f"{d:02d}"
+            for d in exclusoes
+        )
+    )
+
+    print()
+    print("=" * 50)
+    print("18 DEZENAS CANDIDATAS")
+    print("=" * 50)
+
+    print(
+        " ".join(
+            f"{d:02d}"
+            for d in candidatas
+        )
+    )
+
 
 if __name__ == "__main__":
-    print("1. Carregando dados históricos da Lotofácil...")
-    # Substitua pelo nome do seu arquivo CSV real
-    caminho_csv = "dados_lotofacil.csv" 
-    
-    try:
-        df_bolas = carregar_dados(caminho_csv)
-        print(f"-> Total de concursos carregados: {len(df_bolas)}")
-    except Exception as e:
-        print(f"Erro ao carregar o CSV: {e}")
-        print("Certifique-se de que o arquivo 'dados_lotofacil.csv' está na mesma pasta.")
-        exit()
-
-    print("\n2. Inicializando Engenharia de Features Estatísticas...")
-    gerador = GeradorEstatisticasAvancadas(df_bolas)
-
-    print("\n3. Construindo dataset de treinamento (X, y)...")
-    # Usa os concursos a partir do índice 200 para garantir histórico suficiente nas janelas
-    X, y = gerador.construir_dataset_ml(janela_minima=200)
-    print(f"-> Amostras de treino criadas: {X.shape[0]}")
-
-    print("\n4. Treinando o modelo de Machine Learning (Random Forest Multi-Output)...")
-    # Treina com os dados históricos passados
-    modelo = MultiOutputClassifier(
-        RandomForestClassifier(n_estimators=150, max_depth=7, random_state=42, n_jobs=-1)
-    )
-    modelo.fit(X, y)
-    print("-> Modelo treinado com sucesso!")
-
-    print("\n5. Calculando previsões e exclusões para o próximo concurso...")
-    # Pega o índice do último concurso disponível na base
-    ultimo_indice = len(df_bolas) - 1
-    features_atual = gerador.calcular_features_no_indice(ultimo_indice).reshape(1, -1)
-    
-    probabilidades = modelo.predict_proba(features_atual)
-    
-    ranking_nao_sair = []
-    for dezena in range(25):
-        # Probabilidade da classe 0 (probabilidade da dezena NÃO sair no próximo)
-        prob_nao_sair = probabilidades[dezena][0][0] if len(probabilidades[dezena][0]) > 1 else 0.5
-        ranking_nao_sair.append((dezena + 1, prob_nao_sair))
-        
-    # Ordena do maior risco de NÃO sair para o menor
-    ranking_nao_sair.sort(key=lambda x: x[1], reverse=True)
-
-    # Vamos sugerir excluir as 7 piores dezenas preditas pelo modelo
-    n_exclusoes = 7
-    exclusoes = [d for d, p in ranking_nao_sair[:n_exclusoes]]
-    
-    print("\n" + "="*50)
-    print(f" RESULTADO DA ANÁLISE PARA O PRÓXIMO CONCURSO ")
-    print("="*50)
-    print(f"🚫 Piores dezenas sugeridas para EXCLUSÃO ({n_exclusoes} dezenas):")
-    for dezena, prob in ranking_nao_sair[:n_exclusoes]:
-        print(f"   - Dezena {dezena:02d} (Probabilidade de falha: {prob*100:.1f}%)")
-
-    print("\n" + "-"*50)
-    print("🎲 Sugestões de Jogos Otimizados (Filtrando as exclusões):")
-    meus_jogos = gerar_jogos_otimizados(exclusoes, qtd_jogos=3, tamanho_jogo=15)
-    for i, jogo in enumerate(meus_jogos, 1):
-        jogo_str = " ".join([f"{num:02d}" for num in jogo])
-        print(f"   Jogo {i}: [ {jogo_str} ]")
-    print("="*50)
+    main()
