@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 
 
 from dados import carregar_resultados
-from features_v2 import GeradorFeaturesV2
+from features_v2_reference import GeradorFeaturesV2
 
 
 # ============================================================
