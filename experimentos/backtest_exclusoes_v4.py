@@ -6,10 +6,48 @@ import numpy as np
 import pandas as pd
 
 from sklearn.ensemble import RandomForestClassifier
-
 from sklearn.metrics import (
     roc_auc_score,
     brier_score_loss
+)
+
+
+# ============================================================
+# PATH DO PROJETO
+# ============================================================
+
+ROOT = Path(__file__).resolve().parent.parent
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(
+        0,
+        str(ROOT)
+    )
+
+
+# ============================================================
+# IMPORTS DO PROJETO
+#
+# IMPORTANTE:
+# precisam vir DEPOIS de adicionar ROOT ao sys.path
+# ============================================================
+
+from dados import carregar_resultados
+
+from features_v2_reference import (
+    GeradorFeaturesV2
+)
+
+from ranking_v4 import (
+    FEATURES_META,
+    construir_features_meta,
+    treinar_v4,
+    criar_ranking_v4,
+    obter_pesos_modelo
+)
+
+from cache_dataset import (
+    obter_dataset_v2
 )
 
 
@@ -257,28 +295,25 @@ def criar_ranking_v2(
 
 def preparar_dataset():
 
-    print(
-        "=" * 100
+    print("=" * 100)
+    print("BACKTEST V4 - META-RANKING")
+    print("=" * 100)
+
+    caminho_excel = (
+        ROOT
+        / "lotofacil_resultados.xlsx"
     )
 
-    print(
-        "BACKTEST V4 - META-RANKING"
-    )
-
-    print(
-        "=" * 100
+    caminho_features = (
+        ROOT
+        / "features_v2_reference.py"
     )
 
     print()
-    print(
-        "Carregando histórico..."
-    )
+    print("Carregando histórico...")
 
-    df, df_bolas = (
-        carregar_resultados(
-            ROOT
-            / "lotofacil_resultados.xlsx"
-        )
+    df, df_bolas = carregar_resultados(
+        caminho_excel
     )
 
     print(
@@ -286,42 +321,39 @@ def preparar_dataset():
         f"{len(df_bolas)}"
     )
 
-    gerador = (
-        GeradorFeaturesV2(
-            df_bolas
-        )
-    )
-
-    print()
-    print(
-        "Construindo dataset V2..."
-    )
-
-    inicio = (
-        time.time()
-    )
-
     (
+        gerador,
         X,
         y,
         indices_target,
-        dezenas
-    ) = (
-        gerador
-        .construir_dataset(
-            janela_minima=
-                JANELA_MINIMA
+        dezenas,
+        matriz_binaria
+    ) = obter_dataset_v2(
+        caminho_excel=caminho_excel,
+        caminho_features=caminho_features,
+        df_bolas=df_bolas,
+        classe_gerador=GeradorFeaturesV2,
+        janela_minima=JANELA_MINIMA
+    )
+
+    if gerador is None:
+
+        class GeradorCache:
+            pass
+
+        gerador = GeradorCache()
+
+        gerador.total_sorteios = (
+            len(matriz_binaria)
         )
-    )
 
-    print(
-        f"Dataset criado em "
-        f"{time.time() - inicio:.1f}s"
-    )
+        gerador.matriz_binaria = (
+            matriz_binaria
+        )
 
-    print(
-        f"X = {X.shape}"
-    )
+    print()
+    print(f"X = {X.shape}")
+    print(f"y = {y.shape}")
 
     return (
         df,

@@ -1,10 +1,15 @@
 from pathlib import Path
+
 import hashlib
 import json
 import time
 
 import numpy as np
 
+
+# ============================================================
+# PATHS
+# ============================================================
 
 ROOT = Path(__file__).resolve().parent
 
@@ -20,23 +25,44 @@ CACHE_DATASET = (
 
 CACHE_METADATA = (
     CACHE_DIR
-    / "features_v2_dataset.json"
+    / "features_v2_metadata.json"
 )
 
 
 # ============================================================
-# HASH DA BASE
+# VERSÃO MANUAL DO CACHE
+#
+# Se quisermos invalidar tudo manualmente no futuro,
+# basta incrementar esse número.
+# ============================================================
+
+CACHE_VERSION = 1
+
+
+# ============================================================
+# HASH DE ARQUIVO
 # ============================================================
 
 def calcular_hash_arquivo(
     caminho
 ):
     """
-    Gera uma assinatura do arquivo Excel.
+    Calcula SHA256 do arquivo.
 
-    Se qualquer coisa mudar no arquivo,
-    o hash também muda e invalidamos o cache.
+    Usamos isso para detectar alterações em:
+
+        - lotofacil_resultados.xlsx
+        - features_v2_reference.py
     """
+
+    caminho = Path(
+        caminho
+    )
+
+    if not caminho.exists():
+        raise FileNotFoundError(
+            f"Arquivo não encontrado: {caminho}"
+        )
 
     sha256 = hashlib.sha256()
 
@@ -64,76 +90,151 @@ def calcular_hash_arquivo(
 
 
 # ============================================================
-# VALIDAR CACHE
+# METADATA ESPERADA
 # ============================================================
 
-def cache_valido(
+def gerar_metadata_esperada(
     caminho_excel,
+    caminho_features,
     janela_minima
 ):
-    if not CACHE_DATASET.exists():
-        return False
+    """
+    Tudo que influencia o conteúdo do dataset
+    precisa fazer parte da validação do cache.
+    """
 
+    return {
+        "cache_version":
+            CACHE_VERSION,
+
+        "hash_excel":
+            calcular_hash_arquivo(
+                caminho_excel
+            ),
+
+        "hash_features":
+            calcular_hash_arquivo(
+                caminho_features
+            ),
+
+        "janela_minima":
+            int(
+                janela_minima
+            )
+    }
+
+
+# ============================================================
+# CARREGAR METADATA
+# ============================================================
+
+def carregar_metadata():
     if not CACHE_METADATA.exists():
-        return False
+        return None
 
     try:
-
         with open(
             CACHE_METADATA,
             "r",
             encoding="utf-8"
         ) as arquivo:
 
-            metadata = json.load(
+            return json.load(
                 arquivo
             )
 
-    except Exception:
+    except (
+        OSError,
+        json.JSONDecodeError
+    ):
+        return None
+
+
+# ============================================================
+# VALIDAR CACHE
+# ============================================================
+
+def cache_valido(
+    caminho_excel,
+    caminho_features,
+    janela_minima
+):
+    """
+    Cache só é considerado válido se:
+
+        1. arquivo NPZ existir
+        2. metadata existir
+        3. versão for igual
+        4. Excel for exatamente o mesmo
+        5. features_v2_reference.py for exatamente o mesmo
+        6. janela_minima for igual
+    """
+
+    if not CACHE_DATASET.exists():
+
+        print(
+            "Cache V2: dataset ainda não existe."
+        )
 
         return False
 
-    hash_atual = (
-        calcular_hash_arquivo(
-            caminho_excel
+    metadata_salva = (
+        carregar_metadata()
+    )
+
+    if metadata_salva is None:
+
+        print(
+            "Cache V2: metadata inexistente ou inválida."
+        )
+
+        return False
+
+    metadata_esperada = (
+        gerar_metadata_esperada(
+            caminho_excel=
+                caminho_excel,
+
+            caminho_features=
+                caminho_features,
+
+            janela_minima=
+                janela_minima
         )
     )
 
-    if (
-        metadata.get(
-            "hash_excel"
-        )
-        != hash_atual
+    for chave, valor_esperado in (
+        metadata_esperada.items()
     ):
-        print(
-            "Cache V2 inválido: "
-            "arquivo Excel mudou."
+
+        valor_salvo = (
+            metadata_salva.get(
+                chave
+            )
         )
 
-        return False
+        if (
+            valor_salvo
+            != valor_esperado
+        ):
 
-    if (
-        metadata.get(
-            "janela_minima"
-        )
-        != janela_minima
-    ):
-        print(
-            "Cache V2 inválido: "
-            "janela mínima mudou."
-        )
+            print(
+                f"Cache V2 inválido: "
+                f"'{chave}' mudou."
+            )
 
-        return False
+            return False
 
     return True
 
 
 # ============================================================
-# SALVAR
+# SALVAR CACHE
 # ============================================================
 
 def salvar_cache(
     caminho_excel,
+    caminho_features,
     janela_minima,
     X,
     y,
@@ -141,6 +242,11 @@ def salvar_cache(
     dezenas,
     matriz_binaria
 ):
+    """
+    Salva dataset e informações necessárias
+    para reconstruir o estado usado pelos backtests.
+    """
+
     CACHE_DIR.mkdir(
         parents=True,
         exist_ok=True
@@ -153,32 +259,56 @@ def salvar_cache(
 
     inicio = time.time()
 
-    np.savez_compressed(
+    # --------------------------------------------------------
+    # Sem compressão de propósito.
+    #
+    # O arquivo fica um pouco maior, mas carrega muito
+    # mais rapidamente durante nossos experimentos.
+    # --------------------------------------------------------
+
+    np.savez(
         CACHE_DATASET,
 
-        X=X,
-
-        y=y,
-
-        indices_target=
-            indices_target,
-
-        dezenas=
-            dezenas,
-
-        matriz_binaria=
-            matriz_binaria
-    )
-
-    metadata = {
-        "hash_excel":
-            calcular_hash_arquivo(
-                caminho_excel
+        X=
+            np.asarray(
+                X
             ),
 
-        "janela_minima":
-            janela_minima,
+        y=
+            np.asarray(
+                y
+            ),
 
+        indices_target=
+            np.asarray(
+                indices_target
+            ),
+
+        dezenas=
+            np.asarray(
+                dezenas
+            ),
+
+        matriz_binaria=
+            np.asarray(
+                matriz_binaria
+            )
+    )
+
+    metadata = (
+        gerar_metadata_esperada(
+            caminho_excel=
+                caminho_excel,
+
+            caminho_features=
+                caminho_features,
+
+            janela_minima=
+                janela_minima
+        )
+    )
+
+    metadata.update({
         "shape_X":
             list(
                 X.shape
@@ -187,8 +317,37 @@ def salvar_cache(
         "shape_y":
             list(
                 y.shape
+            ),
+
+        "shape_indices_target":
+            list(
+                indices_target.shape
+            ),
+
+        "shape_dezenas":
+            list(
+                dezenas.shape
+            ),
+
+        "shape_matriz_binaria":
+            list(
+                matriz_binaria.shape
+            ),
+
+        "total_sorteios":
+            int(
+                matriz_binaria.shape[0]
+            ),
+
+        "quantidade_features":
+            int(
+                X.shape[1]
             )
-    }
+            if len(
+                X.shape
+            ) > 1
+            else 0
+    })
 
     with open(
         CACHE_METADATA,
@@ -199,24 +358,45 @@ def salvar_cache(
         json.dump(
             metadata,
             arquivo,
-            indent=2
+            indent=2,
+            ensure_ascii=False
         )
 
-    print(
-        f"Cache salvo em "
-        f"{time.time() - inicio:.2f}s"
+    tempo = (
+        time.time()
+        - inicio
     )
 
     print(
-        CACHE_DATASET
+        f"Cache V2 salvo em "
+        f"{tempo:.2f}s"
+    )
+
+    print(
+        f"Dataset: "
+        f"{CACHE_DATASET}"
+    )
+
+    print(
+        f"Metadata: "
+        f"{CACHE_METADATA}"
     )
 
 
 # ============================================================
-# CARREGAR
+# CARREGAR CACHE
 # ============================================================
 
 def carregar_cache():
+    """
+    Carrega o dataset previamente calculado.
+    """
+
+    if not CACHE_DATASET.exists():
+        raise FileNotFoundError(
+            f"Cache não encontrado: "
+            f"{CACHE_DATASET}"
+        )
 
     print()
     print(
@@ -225,38 +405,72 @@ def carregar_cache():
 
     inicio = time.time()
 
-    dados = np.load(
+    with np.load(
         CACHE_DATASET,
         allow_pickle=False
+    ) as dados:
+
+        # ----------------------------------------------------
+        # Fazemos copy() para não deixar os arrays
+        # dependentes do objeto np.load após fechar o arquivo.
+        # ----------------------------------------------------
+
+        X = (
+            dados[
+                "X"
+            ]
+            .copy()
+        )
+
+        y = (
+            dados[
+                "y"
+            ]
+            .copy()
+        )
+
+        indices_target = (
+            dados[
+                "indices_target"
+            ]
+            .copy()
+        )
+
+        dezenas = (
+            dados[
+                "dezenas"
+            ]
+            .copy()
+        )
+
+        matriz_binaria = (
+            dados[
+                "matriz_binaria"
+            ]
+            .copy()
+        )
+
+    tempo = (
+        time.time()
+        - inicio
     )
 
-    X = dados[
-        "X"
-    ]
-
-    y = dados[
-        "y"
-    ]
-
-    indices_target = dados[
-        "indices_target"
-    ]
-
-    dezenas = dados[
-        "dezenas"
-    ]
-
-    matriz_binaria = dados[
-        "matriz_binaria"
-    ]
-
     print(
-        f"Cache carregado em "
-        f"{time.time() - inicio:.2f}s"
+        f"Cache V2 carregado em "
+        f"{tempo:.2f}s"
     )
 
     print(
         f"X = {X.shape}"
+    )
+
+    print(
+        f"y = {y.shape}"
+    )
+
+    print(
+        f"Concursos = "
+        f"{matriz_binaria.shape[0]}"
     )
 
     return (
@@ -269,31 +483,83 @@ def carregar_cache():
 
 
 # ============================================================
-# OBTER OU CRIAR
+# OBTER DATASET
 # ============================================================
 
 def obter_dataset_v2(
     caminho_excel,
+    caminho_features,
     df_bolas,
     classe_gerador,
     janela_minima
 ):
     """
-    Interface principal.
+    Interface principal utilizada pelos backtests.
 
-    Se existe cache válido:
-        carrega.
+    Se houver cache válido:
 
-    Senão:
-        gera tudo,
+        retorna os arrays do disco.
+
+    Caso contrário:
+
+        instancia GeradorFeaturesV2,
+        calcula tudo,
         salva,
         retorna.
+
+    Retorno:
+
+        (
+            gerador,
+            X,
+            y,
+            indices_target,
+            dezenas,
+            matriz_binaria
+        )
+
+    Quando vem do cache:
+
+        gerador = None
+
+    pois não precisamos instanciar o gerador pesado.
     """
 
+    caminho_excel = Path(
+        caminho_excel
+    )
+
+    caminho_features = Path(
+        caminho_features
+    )
+
+    # ========================================================
+    # TENTAR CACHE
+    # ========================================================
+
     if cache_valido(
-        caminho_excel,
-        janela_minima
+        caminho_excel=
+            caminho_excel,
+
+        caminho_features=
+            caminho_features,
+
+        janela_minima=
+            janela_minima
     ):
+
+        print()
+        print(
+            "=" * 70
+        )
+
+        print(
+            "CACHE V2 ENCONTRADO"
+        )
+
+        print(
+            "=" * 70
+        )
 
         (
             X,
@@ -313,50 +579,92 @@ def obter_dataset_v2(
         )
 
     # ========================================================
-    # CACHE NÃO EXISTE
+    # CACHE INVÁLIDO / INEXISTENTE
     # ========================================================
 
     print()
     print(
-        "Cache V2 não encontrado "
-        "ou inválido."
+        "=" * 70
     )
 
     print(
-        "Gerando dataset..."
+        "CACHE V2 NÃO ENCONTRADO "
+        "OU DESATUALIZADO"
     )
 
-    gerador = classe_gerador(
-        df_bolas
+    print(
+        "=" * 70
+    )
+
+    print()
+    print(
+        "Gerando dataset V2..."
     )
 
     inicio = time.time()
+
+    gerador = (
+        classe_gerador(
+            df_bolas
+        )
+    )
 
     (
         X,
         y,
         indices_target,
         dezenas
-    ) = gerador.construir_dataset(
-        janela_minima=
-            janela_minima
+    ) = (
+        gerador
+        .construir_dataset(
+            janela_minima=
+                janela_minima
+        )
+    )
+
+    matriz_binaria = (
+        gerador
+        .matriz_binaria
+    )
+
+    tempo = (
+        time.time()
+        - inicio
+    )
+
+    print()
+    print(
+        f"Dataset V2 calculado em "
+        f"{tempo:.1f}s"
     )
 
     print(
-        f"Dataset calculado em "
-        f"{time.time() - inicio:.1f}s"
+        f"X = {X.shape}"
     )
+
+    print(
+        f"y = {y.shape}"
+    )
+
+    # ========================================================
+    # SALVAR
+    # ========================================================
 
     salvar_cache(
         caminho_excel=
             caminho_excel,
 
+        caminho_features=
+            caminho_features,
+
         janela_minima=
             janela_minima,
 
-        X=X,
+        X=
+            X,
 
-        y=y,
+        y=
+            y,
 
         indices_target=
             indices_target,
@@ -365,7 +673,7 @@ def obter_dataset_v2(
             dezenas,
 
         matriz_binaria=
-            gerador.matriz_binaria
+            matriz_binaria
     )
 
     return (
@@ -374,5 +682,86 @@ def obter_dataset_v2(
         y,
         indices_target,
         dezenas,
-        gerador.matriz_binaria
+        matriz_binaria
     )
+
+
+# ============================================================
+# LIMPAR CACHE
+# ============================================================
+
+def limpar_cache():
+    """
+    Útil para manutenção manual:
+
+        from cache_dataset import limpar_cache
+        limpar_cache()
+    """
+
+    arquivos = [
+        CACHE_DATASET,
+        CACHE_METADATA
+    ]
+
+    removeu = False
+
+    for arquivo in arquivos:
+
+        if arquivo.exists():
+
+            arquivo.unlink()
+
+            print(
+                f"Removido: {arquivo}"
+            )
+
+            removeu = True
+
+    if not removeu:
+
+        print(
+            "Nenhum cache encontrado."
+        )
+
+
+# ============================================================
+# INFO
+# ============================================================
+
+def mostrar_info_cache():
+    """
+    Mostra metadata atualmente armazenada.
+    """
+
+    metadata = (
+        carregar_metadata()
+    )
+
+    print()
+    print(
+        "=" * 70
+    )
+
+    print(
+        "INFORMAÇÕES DO CACHE V2"
+    )
+
+    print(
+        "=" * 70
+    )
+
+    if metadata is None:
+
+        print(
+            "Cache inexistente."
+        )
+
+        return
+
+    for chave, valor in (
+        metadata.items()
+    ):
+
+        print(
+            f"{chave}: {valor}"
+        )
