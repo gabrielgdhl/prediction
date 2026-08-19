@@ -8,7 +8,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     roc_auc_score,
-    brier_score_loss
+    brier_score_loss,
 )
 
 
@@ -32,20 +32,30 @@ if str(ROOT) not in sys.path:
 from dados import carregar_resultados
 
 from features_v2_reference import (
-    GeradorFeaturesV2
-)
-
-from ranking_v4 import (
-    FEATURES_META,
-    construir_features_meta,
-    treinar_v4,
-    criar_ranking_v4,
-    obter_pesos_modelo
+    GeradorFeaturesV2,
 )
 
 from cache_dataset import (
-    obter_dataset_v2
+    obter_dataset_v2,
 )
+
+from features_v5 import (
+    calcular_features_v5_concurso,
+)
+
+from ranking_v4 import (
+    criar_ranking_v4,
+    treinar_v4,
+)
+
+from ranking_v5 import (
+    FEATURES_META_V5,
+    construir_matriz_v5,
+    treinar_v5,
+    criar_ranking_v5,
+    obter_pesos_v5,
+)
+
 
 # ============================================================
 # CONFIGURAÇÕES
@@ -53,32 +63,14 @@ from cache_dataset import (
 
 JANELA_MINIMA = 200
 
-
-# ------------------------------------------------------------
-# META-MODELO
-#
-# Esses concursos são usados para a Logistic Regression
-# aprender os pesos.
-# ------------------------------------------------------------
-
 CONCURSOS_META_TREINO = 400
-
-
-# ------------------------------------------------------------
-# TESTE FINAL
-#
-# O V4 nunca aprende os pesos olhando esses concursos.
-# ------------------------------------------------------------
 
 CONCURSOS_TESTE_FINAL = 100
 
 
-# ------------------------------------------------------------
+# ============================================================
 # V2
-#
-# Mantemos EXATAMENTE os parâmetros já utilizados
-# no baseline V2.
-# ------------------------------------------------------------
+# ============================================================
 
 N_ESTIMATORS = 100
 
@@ -89,23 +81,31 @@ MIN_SAMPLES_LEAF = 10
 SEED = 42
 
 
+# ============================================================
+# EXCLUSÕES TESTADAS
+# ============================================================
+
 CENARIOS_EXCLUSOES = [
     4,
     5,
     6,
-    7
+    7,
 ]
 
+
+# ============================================================
+# SAÍDA
+# ============================================================
 
 ARQUIVO_SAIDA = (
     ROOT
     / "experimentos"
-    / "resultado_backtest_exclusoes_v4.xlsx"
+    / "resultado_backtest_exclusoes_v5.xlsx"
 )
 
 
 # ============================================================
-# V2
+# V2 RANDOM FOREST
 # ============================================================
 
 def criar_modelo_v2():
@@ -126,7 +126,7 @@ def criar_modelo_v2():
         n_jobs=-1,
 
         class_weight=
-            "balanced_subsample"
+            "balanced_subsample",
     )
 
 
@@ -156,6 +156,10 @@ def esperado_aleatorio(
         * (10 / 25)
     )
 
+
+# ============================================================
+# FEATURES V2 POR DEZENA
+# ============================================================
 
 def criar_features_por_dezena(
     X_teste,
@@ -243,7 +247,7 @@ def criar_ranking_v2(
 
             "prob_nao_sair":
                 1.0
-                - prob_sair
+                - prob_sair,
         })
 
     ranking.sort(
@@ -258,14 +262,24 @@ def criar_ranking_v2(
 
 
 # ============================================================
-# DATASET BASE
+# DATASET V2 COM CACHE
 # ============================================================
 
 def preparar_dataset():
 
-    print("=" * 100)
-    print("BACKTEST V4 - META-RANKING")
-    print("=" * 100)
+    print(
+        "=" * 100
+    )
+
+    print(
+        "BACKTEST V5 - "
+        "META-RANKING COM FEATURES RELATIVAS "
+        "E SOBREVIVÊNCIA"
+    )
+
+    print(
+        "=" * 100
+    )
 
     caminho_excel = (
         ROOT
@@ -278,10 +292,14 @@ def preparar_dataset():
     )
 
     print()
-    print("Carregando histórico...")
+    print(
+        "Carregando histórico..."
+    )
 
-    df, df_bolas = carregar_resultados(
-        caminho_excel
+    df, df_bolas = (
+        carregar_resultados(
+            caminho_excel
+        )
     )
 
     print(
@@ -295,24 +313,43 @@ def preparar_dataset():
         y,
         indices_target,
         dezenas,
-        matriz_binaria
-    ) = obter_dataset_v2(
-        caminho_excel=caminho_excel,
-        caminho_features=caminho_features,
-        df_bolas=df_bolas,
-        classe_gerador=GeradorFeaturesV2,
-        janela_minima=JANELA_MINIMA
+        matriz_binaria,
+    ) = (
+        obter_dataset_v2(
+            caminho_excel=
+                caminho_excel,
+
+            caminho_features=
+                caminho_features,
+
+            df_bolas=
+                df_bolas,
+
+            classe_gerador=
+                GeradorFeaturesV2,
+
+            janela_minima=
+                JANELA_MINIMA,
+        )
     )
+
+    # ========================================================
+    # QUANDO VEM DO CACHE
+    # ========================================================
 
     if gerador is None:
 
         class GeradorCache:
             pass
 
-        gerador = GeradorCache()
+        gerador = (
+            GeradorCache()
+        )
 
         gerador.total_sorteios = (
-            len(matriz_binaria)
+            len(
+                matriz_binaria
+            )
         )
 
         gerador.matriz_binaria = (
@@ -320,8 +357,13 @@ def preparar_dataset():
         )
 
     print()
-    print(f"X = {X.shape}")
-    print(f"y = {y.shape}")
+    print(
+        f"X = {X.shape}"
+    )
+
+    print(
+        f"y = {y.shape}"
+    )
 
     return (
         df,
@@ -329,12 +371,12 @@ def preparar_dataset():
         X,
         y,
         indices_target,
-        dezenas
+        dezenas,
     )
 
 
 # ============================================================
-# GERAR UM CASO WALK-FORWARD
+# GERAR UM CASO V2 WALK-FORWARD
 # ============================================================
 
 def gerar_caso_v2(
@@ -344,15 +386,12 @@ def gerar_caso_v2(
     X,
     y,
     indices_target,
-    dezenas
+    dezenas,
 ):
-    """
-    Muito importante:
 
-    Para prever indice_alvo:
-
-        V2 só treina com targets < indice_alvo.
-    """
+    # ========================================================
+    # TREINO
+    # ========================================================
 
     mascara_treino = (
         indices_target
@@ -371,6 +410,10 @@ def gerar_caso_v2(
         ]
     )
 
+    # ========================================================
+    # TESTE
+    # ========================================================
+
     mascara_teste = (
         indices_target
         == indice_alvo
@@ -388,11 +431,18 @@ def gerar_caso_v2(
         ]
     )
 
-    if len(X_teste) != 25:
+    if len(
+        X_teste
+    ) != 25:
+
         raise ValueError(
             f"Índice {indice_alvo} "
             f"possui {len(X_teste)} linhas."
         )
+
+    # ========================================================
+    # TREINAR V2
+    # ========================================================
 
     modelo_v2 = (
         criar_modelo_v2()
@@ -400,23 +450,63 @@ def gerar_caso_v2(
 
     modelo_v2.fit(
         X_treino,
-        y_treino
+        y_treino,
     )
+
+    # ========================================================
+    # RANKING V2
+    # ========================================================
 
     ranking_v2 = (
         criar_ranking_v2(
-            modelo_v2,
-            X_teste,
-            dezenas_teste
+            modelo=
+                modelo_v2,
+
+            X_teste=
+                X_teste,
+
+            dezenas_teste=
+                dezenas_teste,
         )
     )
 
+    # ========================================================
+    # FEATURES V2 INDIVIDUAIS
+    # ========================================================
+
     features_por_dezena = (
         criar_features_por_dezena(
-            X_teste,
-            dezenas_teste
+            X_teste=
+                X_teste,
+
+            dezenas_teste=
+                dezenas_teste,
         )
     )
+
+    # ========================================================
+    # FEATURES EXTRAS V5
+    #
+    # indice_alvo é o concurso que queremos prever.
+    #
+    # Portanto o último concurso conhecido é:
+    #
+    # indice_alvo - 1
+    # ========================================================
+
+    extras_v5 = (
+        calcular_features_v5_concurso(
+            matriz_binaria=
+                gerador.matriz_binaria,
+
+            indice_estado=
+                indice_alvo - 1,
+        )
+    )
+
+    # ========================================================
+    # RESULTADO REAL
+    # ========================================================
 
     sorteadas = set(
         np.where(
@@ -425,7 +515,8 @@ def gerar_caso_v2(
                 indice_alvo
             ]
             == 1
-        )[0] + 1
+        )[0]
+        + 1
     )
 
     nao_sorteadas = (
@@ -438,7 +529,14 @@ def gerar_caso_v2(
         - sorteadas
     )
 
-    if "Concurso" in df.columns:
+    # ========================================================
+    # CONCURSO
+    # ========================================================
+
+    if (
+        "Concurso"
+        in df.columns
+    ):
 
         concurso = int(
             df.iloc[
@@ -468,16 +566,19 @@ def gerar_caso_v2(
         "features_por_dezena":
             features_por_dezena,
 
+        "extras_v5":
+            extras_v5,
+
         "sorteadas":
             sorteadas,
 
         "nao_sorteadas":
-            nao_sorteadas
+            nao_sorteadas,
     }
 
 
 # ============================================================
-# GERAR CASOS
+# PREPARAR CASOS
 # ============================================================
 
 def preparar_casos():
@@ -488,7 +589,7 @@ def preparar_casos():
         X,
         y,
         indices_target,
-        dezenas
+        dezenas,
     ) = preparar_dataset()
 
     total = (
@@ -508,37 +609,37 @@ def preparar_casos():
 
     inicio_meta = max(
         inicio_meta,
-        JANELA_MINIMA + 1
+        JANELA_MINIMA + 1,
     )
 
     print()
+    print(
+        "=" * 70
+    )
+
     print(
         "DIVISÃO TEMPORAL"
     )
 
     print(
-        "-" * 60
+        "=" * 70
     )
 
     print(
-        f"Meta-treino:"
-        f" índices {inicio_meta} "
+        f"Meta-treino: "
+        f"{inicio_meta} "
         f"até {inicio_teste - 1}"
     )
 
     print(
-        f"Teste final:"
-        f" índices {inicio_teste} "
+        f"Teste final: "
+        f"{inicio_teste} "
         f"até {total - 1}"
     )
 
     casos_meta = []
-    casos_teste = []
 
-    indices_processar = range(
-        inicio_meta,
-        total
-    )
+    casos_teste = []
 
     quantidade = (
         total
@@ -551,36 +652,50 @@ def preparar_casos():
 
     print()
     print(
-        f"Gerando {quantidade} "
-        f"previsões walk-forward V2..."
+        f"Gerando "
+        f"{quantidade} "
+        f"casos walk-forward V2..."
     )
 
+    # ========================================================
+    # LOOP
+    # ========================================================
+
     for numero, indice_alvo in enumerate(
-        indices_processar,
-        start=1
+        range(
+            inicio_meta,
+            total
+        ),
+        start=1,
     ):
 
-        caso = gerar_caso_v2(
-            indice_alvo=
-                indice_alvo,
+        inicio_caso = (
+            time.time()
+        )
 
-            df=
-                df,
+        caso = (
+            gerar_caso_v2(
+                indice_alvo=
+                    indice_alvo,
 
-            gerador=
-                gerador,
+                df=
+                    df,
 
-            X=
-                X,
+                gerador=
+                    gerador,
 
-            y=
-                y,
+                X=
+                    X,
 
-            indices_target=
-                indices_target,
+                y=
+                    y,
 
-            dezenas=
-                dezenas
+                indices_target=
+                    indices_target,
+
+                dezenas=
+                    dezenas,
+            )
         )
 
         if (
@@ -607,36 +722,47 @@ def preparar_casos():
             print(
                 f"{numero:03d}/"
                 f"{quantidade}"
+                f" | último="
+                f"{time.time() - inicio_caso:.2f}s"
                 f" | total="
                 f"{time.time() - inicio_execucao:.1f}s"
             )
 
     print()
     print(
-        f"Casos meta-treino: "
+        f"Casos meta: "
         f"{len(casos_meta)}"
     )
 
     print(
-        f"Casos teste final: "
+        f"Casos teste: "
         f"{len(casos_teste)}"
     )
 
     return (
         casos_meta,
-        casos_teste
+        casos_teste,
     )
 
 
 # ============================================================
-# DATASET DO META-MODELO
+# DATASET META V4
 # ============================================================
 
-def construir_dataset_meta(
+def construir_dataset_meta_v4(
     casos
 ):
+    """
+    Vamos treinar também o V4 para comparar
+    usando exatamente os mesmos 400 concursos.
+    """
+
+    from ranking_v4 import (
+        construir_features_meta,
+    )
 
     X_meta = []
+
     y_meta = []
 
     for caso in casos:
@@ -674,13 +800,8 @@ def construir_dataset_meta(
                             "features_por_dezena"
                         ][
                             dezena
-                        ]
+                        ],
                 )
-            )
-
-            target = int(
-                dezena
-                in nao_sorteadas
             )
 
             X_meta.append(
@@ -688,92 +809,96 @@ def construir_dataset_meta(
             )
 
             y_meta.append(
-                target
+                int(
+                    dezena
+                    in nao_sorteadas
+                )
             )
 
     return (
         np.asarray(
             X_meta,
-            dtype=np.float64
+            dtype=np.float64,
         ),
 
         np.asarray(
             y_meta,
-            dtype=np.int8
-        )
+            dtype=np.int8,
+        ),
     )
 
 
 # ============================================================
-# TOP-2 SOBERANO
+# DATASET META V5
 # ============================================================
 
-def selecionar_v4_com_top2(
-    ranking_v2,
-    ranking_v4,
-    quantidade
+def construir_dataset_meta_v5(
+    casos
 ):
-    """
-    Preserva:
 
-        Top 1 e Top 2 do V2
+    X_meta = []
 
-    e completa o restante usando o V4.
-    """
+    y_meta = []
 
-    exclusoes = []
+    for caso in casos:
 
-    # ========================================================
-    # TOP 2 V2
-    # ========================================================
+        X_concurso = (
+            construir_matriz_v5(
+                ranking_v2=
+                    caso[
+                        "ranking_v2"
+                    ],
 
-    for item in (
-        ranking_v2[
-            :2
-        ]
-    ):
+                features_por_dezena=
+                    caso[
+                        "features_por_dezena"
+                    ],
 
-        exclusoes.append(
-            item[
-                "dezena"
+                extras_por_dezena=
+                    caso[
+                        "extras_v5"
+                    ],
+            )
+        )
+
+        nao_sorteadas = (
+            caso[
+                "nao_sorteadas"
             ]
         )
 
-        if (
-            len(exclusoes)
-            >= quantidade
+        for indice_dezena in range(
+            25
         ):
-            return set(
-                exclusoes
+
+            dezena = (
+                indice_dezena
+                + 1
             )
 
-    # ========================================================
-    # RESTANTE V4
-    # ========================================================
+            X_meta.append(
+                X_concurso[
+                    indice_dezena
+                ]
+            )
 
-    for item in ranking_v4:
+            y_meta.append(
+                int(
+                    dezena
+                    in nao_sorteadas
+                )
+            )
 
-        dezena = (
-            item[
-                "dezena"
-            ]
-        )
+    return (
+        np.asarray(
+            X_meta,
+            dtype=np.float64,
+        ),
 
-        if dezena in exclusoes:
-            continue
-
-        exclusoes.append(
-            dezena
-        )
-
-        if (
-            len(exclusoes)
-            >= quantidade
-        ):
-            break
-
-    return set(
-        exclusoes
+        np.asarray(
+            y_meta,
+            dtype=np.int8,
+        ),
     )
 
 
@@ -781,16 +906,23 @@ def selecionar_v4_com_top2(
 # TESTE FINAL
 # ============================================================
 
-def testar_modelo(
+def testar_modelos(
     modelo_v4,
-    casos_teste
+    modelo_v5,
+    casos_teste,
 ):
 
     resultados = []
 
-    y_reais_probabilidade = []
+    y_real_v4 = []
+    probs_v4 = []
 
-    probs_v4_todas = []
+    y_real_v5 = []
+    probs_v5 = []
+
+    # ========================================================
+    # LOOP TESTE
+    # ========================================================
 
     for caso in casos_teste:
 
@@ -798,21 +930,6 @@ def testar_modelo(
             caso[
                 "ranking_v2"
             ]
-        )
-
-        ranking_v4 = (
-            criar_ranking_v4(
-                modelo=
-                    modelo_v4,
-
-                ranking_v2=
-                    ranking_v2,
-
-                features_por_dezena=
-                    caso[
-                        "features_por_dezena"
-                    ]
-            )
         )
 
         nao_sorteadas = (
@@ -828,7 +945,50 @@ def testar_modelo(
         )
 
         # ====================================================
-        # MÉTRICAS DE PROBABILIDADE
+        # RANKING V4
+        # ====================================================
+
+        ranking_v4 = (
+            criar_ranking_v4(
+                modelo=
+                    modelo_v4,
+
+                ranking_v2=
+                    ranking_v2,
+
+                features_por_dezena=
+                    caso[
+                        "features_por_dezena"
+                    ],
+            )
+        )
+
+        # ====================================================
+        # RANKING V5
+        # ====================================================
+
+        ranking_v5 = (
+            criar_ranking_v5(
+                modelo=
+                    modelo_v5,
+
+                ranking_v2=
+                    ranking_v2,
+
+                features_por_dezena=
+                    caso[
+                        "features_por_dezena"
+                    ],
+
+                extras_por_dezena=
+                    caso[
+                        "extras_v5"
+                    ],
+            )
+        )
+
+        # ====================================================
+        # MÉTRICAS PROBABILÍSTICAS
         # ====================================================
 
         mapa_v4 = {
@@ -841,35 +1001,53 @@ def testar_modelo(
             in ranking_v4
         }
 
+        mapa_v5 = {
+            item["dezena"]:
+                item[
+                    "prob_nao_sair_v5"
+                ]
+
+            for item
+            in ranking_v5
+        }
+
         for dezena in range(
             1,
             26
         ):
 
-            y_reais_probabilidade.append(
-                int(
-                    dezena
-                    in nao_sorteadas
-                )
+            target = int(
+                dezena
+                in nao_sorteadas
             )
 
-            probs_v4_todas.append(
+            y_real_v4.append(
+                target
+            )
+
+            probs_v4.append(
                 mapa_v4[
                     dezena
                 ]
             )
 
+            y_real_v5.append(
+                target
+            )
+
+            probs_v5.append(
+                mapa_v5[
+                    dezena
+                ]
+            )
+
         # ====================================================
-        # CENÁRIOS
+        # EXCLUSÕES
         # ====================================================
 
         for qtd in (
             CENARIOS_EXCLUSOES
         ):
-
-            # ------------------------------------------------
-            # V2
-            # ------------------------------------------------
 
             exclusoes_v2 = {
                 item[
@@ -882,10 +1060,6 @@ def testar_modelo(
                 ]
             }
 
-            # ------------------------------------------------
-            # V4 PURO
-            # ------------------------------------------------
-
             exclusoes_v4 = {
                 item[
                     "dezena"
@@ -897,22 +1071,16 @@ def testar_modelo(
                 ]
             }
 
-            # ------------------------------------------------
-            # V4 + TOP2 V2
-            # ------------------------------------------------
+            exclusoes_v5 = {
+                item[
+                    "dezena"
+                ]
 
-            exclusoes_v4_top2 = (
-                selecionar_v4_com_top2(
-                    ranking_v2=
-                        ranking_v2,
-
-                    ranking_v4=
-                        ranking_v4,
-
-                    quantidade=
-                        qtd
-                )
-            )
+                for item
+                in ranking_v5[
+                    :qtd
+                ]
+            }
 
             acertos_v2 = len(
                 exclusoes_v2
@@ -924,8 +1092,8 @@ def testar_modelo(
                 & nao_sorteadas
             )
 
-            acertos_v4_top2 = len(
-                exclusoes_v4_top2
+            acertos_v5 = len(
+                exclusoes_v5
                 & nao_sorteadas
             )
 
@@ -941,22 +1109,38 @@ def testar_modelo(
                 "qtd_candidatas":
                     25 - qtd,
 
+                # ================================
+                # ACERTOS
+                # ================================
+
                 "acertos_v2":
                     acertos_v2,
 
                 "acertos_v4":
                     acertos_v4,
 
-                "acertos_v4_top2":
-                    acertos_v4_top2,
+                "acertos_v5":
+                    acertos_v5,
+
+                # ================================
+                # GANHO
+                # ================================
 
                 "ganho_v4_vs_v2":
                     acertos_v4
                     - acertos_v2,
 
-                "ganho_top2_vs_v2":
-                    acertos_v4_top2
+                "ganho_v5_vs_v2":
+                    acertos_v5
                     - acertos_v2,
+
+                "ganho_v5_vs_v4":
+                    acertos_v5
+                    - acertos_v4,
+
+                # ================================
+                # EXCLUSÕES
+                # ================================
 
                 "exclusoes_v2":
                     dezenas_para_texto(
@@ -968,37 +1152,51 @@ def testar_modelo(
                         exclusoes_v4
                     ),
 
-                "exclusoes_v4_top2":
+                "exclusoes_v5":
                     dezenas_para_texto(
-                        exclusoes_v4_top2
+                        exclusoes_v5
                     ),
 
                 "sorteadas_reais":
                     dezenas_para_texto(
                         sorteadas
-                    )
+                    ),
             })
 
     # ========================================================
-    # AUC / BRIER
+    # MÉTRICAS
     # ========================================================
 
-    auc = roc_auc_score(
-        y_reais_probabilidade,
-        probs_v4_todas
+    auc_v4 = roc_auc_score(
+        y_real_v4,
+        probs_v4,
     )
 
-    brier = brier_score_loss(
-        y_reais_probabilidade,
-        probs_v4_todas
+    brier_v4 = brier_score_loss(
+        y_real_v4,
+        probs_v4,
+    )
+
+    auc_v5 = roc_auc_score(
+        y_real_v5,
+        probs_v5,
+    )
+
+    brier_v5 = brier_score_loss(
+        y_real_v5,
+        probs_v5,
     )
 
     return (
         pd.DataFrame(
             resultados
         ),
-        auc,
-        brier
+
+        auc_v4,
+        brier_v4,
+
+        auc_v5,
+        brier_v5,
     )
 
 
@@ -1045,9 +1243,9 @@ def gerar_resumo(
             .mean()
         )
 
-        media_top2 = (
+        media_v5 = (
             dados[
-                "acertos_v4_top2"
+                "acertos_v5"
             ]
             .mean()
         )
@@ -1060,9 +1258,7 @@ def gerar_resumo(
                 25 - qtd,
 
             "concursos":
-                len(
-                    dados
-                ),
+                len(dados),
 
             "aleatorio":
                 aleatorio,
@@ -1073,80 +1269,104 @@ def gerar_resumo(
             "media_v4":
                 media_v4,
 
-            "media_v4_top2":
-                media_top2,
+            "media_v5":
+                media_v5,
 
             "ganho_v4_vs_v2":
                 media_v4
                 - media_v2,
 
-            "ganho_top2_vs_v2":
-                media_top2
+            "ganho_v5_vs_v2":
+                media_v5
                 - media_v2,
 
-            "ganho_v4_percentual_vs_aleatorio":
+            "ganho_v5_vs_v4":
+                media_v5
+                - media_v4,
+
+            "ganho_v5_percentual_vs_aleatorio":
                 (
                     (
-                        media_v4
+                        media_v5
                         / aleatorio
                     )
                     - 1
                 )
                 * 100,
 
-            "ganho_top2_percentual_vs_aleatorio":
-                (
-                    (
-                        media_top2
-                        / aleatorio
-                    )
-                    - 1
-                )
-                * 100,
+            # =================================================
+            # V5 VS V2
+            # =================================================
 
-            "v4_melhor_v2":
+            "v5_melhor_v2":
                 int(
                     (
                         dados[
-                            "ganho_v4_vs_v2"
+                            "ganho_v5_vs_v2"
                         ]
                         > 0
                     )
                     .sum()
                 ),
 
-            "v4_pior_v2":
+            "v5_pior_v2":
                 int(
                     (
                         dados[
-                            "ganho_v4_vs_v2"
+                            "ganho_v5_vs_v2"
                         ]
                         < 0
                     )
                     .sum()
                 ),
 
-            "top2_melhor_v2":
+            "v5_igual_v2":
                 int(
                     (
                         dados[
-                            "ganho_top2_vs_v2"
+                            "ganho_v5_vs_v2"
+                        ]
+                        == 0
+                    )
+                    .sum()
+                ),
+
+            # =================================================
+            # V5 VS V4
+            # =================================================
+
+            "v5_melhor_v4":
+                int(
+                    (
+                        dados[
+                            "ganho_v5_vs_v4"
                         ]
                         > 0
                     )
                     .sum()
                 ),
 
-            "top2_pior_v2":
+            "v5_pior_v4":
                 int(
                     (
                         dados[
-                            "ganho_top2_vs_v2"
+                            "ganho_v5_vs_v4"
                         ]
                         < 0
                     )
                     .sum()
-                )
+                ),
+
+            "v5_igual_v4":
+                int(
+                    (
+                        dados[
+                            "ganho_v5_vs_v4"
+                        ]
+                        == 0
+                    )
+                    .sum()
+                ),
         })
 
     return pd.DataFrame(
@@ -1155,46 +1375,44 @@ def gerar_resumo(
 
 
 # ============================================================
-# PESOS
+# PESOS V5
 # ============================================================
 
-def criar_dataframe_pesos(
-    modelo
+def criar_dataframe_pesos_v5(
+    modelo_v5
 ):
 
-    pesos = (
-        obter_pesos_modelo(
-            modelo
+    return pd.DataFrame(
+        obter_pesos_v5(
+            modelo_v5
         )
     )
 
-    return pd.DataFrame(
-        pesos
-    )
-
 
 # ============================================================
-# OUTPUT
+# MOSTRAR RESULTADO
 # ============================================================
 
 def mostrar_resultados(
     resumo,
-    pesos,
-    auc,
-    brier
+    pesos_v5,
+    auc_v4,
+    brier_v4,
+    auc_v5,
+    brier_v5,
 ):
 
     print()
     print(
-        "=" * 120
+        "=" * 125
     )
 
     print(
-        "RESULTADO FINAL V4"
+        "RESULTADO V5"
     )
 
     print(
-        "=" * 120
+        "=" * 125
     )
 
     print(
@@ -1207,36 +1425,65 @@ def mostrar_resultados(
 
     print()
     print(
+        "=" * 70
+    )
+
+    print(
+        "MÉTRICAS"
+    )
+
+    print(
+        "=" * 70
+    )
+
+    print(
         f"AUC V4:   "
-        f"{auc:.4f}"
+        f"{auc_v4:.4f}"
     )
 
     print(
         f"Brier V4: "
-        f"{brier:.4f}"
+        f"{brier_v4:.4f}"
     )
 
     print()
+
     print(
-        "=" * 90
+        f"AUC V5:   "
+        f"{auc_v5:.4f}"
     )
 
     print(
-        "PESOS APRENDIDOS PELO META-MODELO"
+        f"Brier V5: "
+        f"{brier_v5:.4f}"
+    )
+
+    # ========================================================
+    # PESOS
+    # ========================================================
+
+    print()
+    print(
+        "=" * 100
     )
 
     print(
-        "=" * 90
+        "TOP 30 PESOS V5"
     )
 
     print(
-        pesos[
+        "=" * 100
+    )
+
+    print(
+        pesos_v5[
             [
                 "feature",
                 "peso",
-                "direcao"
+                "direcao",
             ]
         ]
+        .head(30)
         .round(4)
         .to_string(
             index=False
@@ -1245,70 +1492,83 @@ def mostrar_resultados(
 
 
 # ============================================================
-# EXPORTAÇÃO
+# EXPORTAR
 # ============================================================
 
 def exportar(
     resultados,
     resumo,
-    pesos,
-    auc,
-    brier
+    pesos_v5,
+    auc_v4,
+    brier_v4,
+    auc_v5,
+    brier_v5,
 ):
 
     metricas = pd.DataFrame([
         {
             "auc_v4":
-                auc,
+                auc_v4,
 
             "brier_v4":
-                brier,
+                brier_v4,
 
-            "meta_features":
+            "auc_v5":
+                auc_v5,
+
+            "brier_v5":
+                brier_v5,
+
+            "features_v5":
                 len(
-                    FEATURES_META
+                    FEATURES_META_V5
                 ),
 
             "meta_treino_concursos":
                 CONCURSOS_META_TREINO,
 
             "teste_final_concursos":
-                CONCURSOS_TESTE_FINAL
+                CONCURSOS_TESTE_FINAL,
         }
     ])
 
+    ARQUIVO_SAIDA.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
     with pd.ExcelWriter(
         ARQUIVO_SAIDA,
-        engine="openpyxl"
+        engine="openpyxl",
     ) as writer:
 
         resumo.to_excel(
             writer,
             sheet_name="Resumo",
-            index=False
+            index=False,
         )
 
-        pesos.to_excel(
+        pesos_v5.to_excel(
             writer,
-            sheet_name="Pesos",
-            index=False
+            sheet_name="Pesos_V5",
+            index=False,
         )
 
         metricas.to_excel(
             writer,
             sheet_name="Metricas",
-            index=False
+            index=False,
         )
 
         resultados.to_excel(
             writer,
             sheet_name="Detalhes",
-            index=False
+            index=False,
         )
 
     print()
     print(
-        f"Arquivo gerado:"
+        "Arquivo gerado:"
     )
 
     print(
@@ -1322,92 +1582,136 @@ def exportar(
 
 def main():
 
-    inicio = (
+    inicio_total = (
         time.time()
     )
 
     # ========================================================
-    # 1. GERAR PREVISÕES V2 HISTÓRICAS
+    # CASOS WALK-FORWARD
     # ========================================================
 
     (
         casos_meta,
-        casos_teste
+        casos_teste,
     ) = preparar_casos()
 
     # ========================================================
-    # 2. DATASET DO META-MODELO
+    # V4
     # ========================================================
 
     print()
     print(
-        "Construindo dataset do "
-        "meta-modelo..."
+        "Construindo dataset meta V4..."
     )
 
     (
-        X_meta,
-        y_meta
+        X_meta_v4,
+        y_meta_v4,
     ) = (
-        construir_dataset_meta(
+        construir_dataset_meta_v4(
             casos_meta
         )
     )
 
     print(
-        f"X_meta = "
-        f"{X_meta.shape}"
+        f"X_meta_v4 = "
+        f"{X_meta_v4.shape}"
     )
-
-    print(
-        f"y_meta = "
-        f"{y_meta.shape}"
-    )
-
-    # ========================================================
-    # 3. TREINAR V4
-    # ========================================================
 
     print()
     print(
-        "Treinando Logistic Regression V4..."
+        "Treinando V4..."
     )
 
     modelo_v4 = (
         treinar_v4(
-            X_meta,
-            y_meta
+            X_meta_v4,
+            y_meta_v4,
         )
     )
 
     # ========================================================
-    # 4. PESOS
-    # ========================================================
-
-    pesos = (
-        criar_dataframe_pesos(
-            modelo_v4
-        )
-    )
-
-    # ========================================================
-    # 5. TESTE FINAL
+    # V5
     # ========================================================
 
     print()
     print(
-        "Executando teste final "
-        "nos últimos 100 concursos..."
+        "Construindo dataset meta V5..."
+    )
+
+    (
+        X_meta_v5,
+        y_meta_v5,
+    ) = (
+        construir_dataset_meta_v5(
+            casos_meta
+        )
+    )
+
+    print(
+        f"X_meta_v5 = "
+        f"{X_meta_v5.shape}"
+    )
+
+    print(
+        f"Quantidade de "
+        f"features V5 = "
+        f"{len(FEATURES_META_V5)}"
+    )
+
+    print()
+    print(
+        "Treinando V5..."
+    )
+
+    modelo_v5 = (
+        treinar_v5(
+            X_meta_v5,
+            y_meta_v5,
+        )
+    )
+
+    # ========================================================
+    # PESOS
+    # ========================================================
+
+    pesos_v5 = (
+        criar_dataframe_pesos_v5(
+            modelo_v5
+        )
+    )
+
+    # ========================================================
+    # TESTE FINAL
+    # ========================================================
+
+    print()
+    print(
+        "Executando teste final..."
     )
 
     (
         resultados,
-        auc,
-        brier
-    ) = testar_modelo(
-        modelo_v4,
-        casos_teste
+        auc_v4,
+        brier_v4,
+        auc_v5,
+        brier_v5,
+    ) = (
+        testar_modelos(
+            modelo_v4=
+                modelo_v4,
+
+            modelo_v5=
+                modelo_v5,
+
+            casos_teste=
+                casos_teste,
+        )
     )
+
+    # ========================================================
+    # RESUMO
+    # ========================================================
 
     resumo = (
         gerar_resumo(
@@ -1415,29 +1719,53 @@ def main():
         )
     )
 
-    # ========================================================
-    # 6. OUTPUT
-    # ========================================================
-
     mostrar_resultados(
-        resumo,
-        pesos,
-        auc,
-        brier
+        resumo=
+            resumo,
+
+        pesos_v5=
+            pesos_v5,
+
+        auc_v4=
+            auc_v4,
+
+        brier_v4=
+            brier_v4,
+
+        auc_v5=
+            auc_v5,
+
+        brier_v5=
+            brier_v5,
     )
 
     exportar(
-        resultados,
-        resumo,
-        pesos,
-        auc,
-        brier
+        resultados=
+            resultados,
+
+        resumo=
+            resumo,
+
+        pesos_v5=
+            pesos_v5,
+
+        auc_v4=
+            auc_v4,
+
+        brier_v4=
+            brier_v4,
+
+        auc_v5=
+            auc_v5,
+
+        brier_v5=
+            brier_v5,
     )
 
     print()
     print(
         f"Tempo total: "
-        f"{time.time() - inicio:.1f}s"
+        f"{time.time() - inicio_total:.1f}s"
     )
 
 
