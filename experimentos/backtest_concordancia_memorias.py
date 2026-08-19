@@ -68,6 +68,11 @@ from config_ablation_v5 import (
     GRUPO_TENDENCIA_LONGA,
 )
 
+from cache_casos import (
+    carregar_cache_casos,
+    salvar_cache_casos,
+)
+
 
 # ============================================================
 # CONFIG
@@ -75,7 +80,7 @@ from config_ablation_v5 import (
 
 MEMORIA_CURTA = 6
 MEMORIA_LONGA = 94
-
+USAR_CACHE_CASOS = True
 # ------------------------------------------------------------
 # HISTÓRICO COMPLETO
 #
@@ -501,6 +506,60 @@ def gerar_caso(
 # PREPARAR CASOS
 # ============================================================
 
+def obter_dependencias_cache_casos():
+
+    return {
+        "excel":
+            ROOT
+            / "lotofacil_resultados.xlsx",
+
+        "features_v2":
+            ROOT
+            / "features_v2_reference.py",
+
+        "features_v5":
+            ROOT
+            / "features_v5.py",
+
+        "config_ablation_v5":
+            ROOT
+            / "config_ablation_v5.py",
+    }
+
+
+def obter_parametros_cache_casos():
+
+    return {
+        "janela_minima":
+            int(
+                JANELA_MINIMA
+            ),
+
+        "n_estimators":
+            int(
+                N_ESTIMATORS
+            ),
+
+        "max_depth":
+            (
+                None
+                if MAX_DEPTH is None
+                else int(
+                    MAX_DEPTH
+                )
+            ),
+
+        "min_samples_leaf":
+            int(
+                MIN_SAMPLES_LEAF
+            ),
+
+        "seed":
+            int(
+                SEED
+            ),
+    }
+
 def preparar_casos():
 
     (
@@ -619,6 +678,67 @@ def preparar_casos():
         f"{total - 1}"
     )
 
+    # ========================================================
+    # CACHE DOS CASOS WALK-FORWARD
+    # ========================================================
+
+    arquivos_dependencia = (
+        obter_dependencias_cache_casos()
+    )
+
+    parametros_cache = (
+        obter_parametros_cache_casos()
+    )
+
+    if USAR_CACHE_CASOS:
+
+        payload_cache = (
+            carregar_cache_casos(
+                arquivos_dependencia=
+                    arquivos_dependencia,
+
+                parametros=
+                    parametros_cache,
+            )
+        )
+
+        if payload_cache is not None:
+
+            casos = (
+                payload_cache[
+                    "casos"
+                ]
+            )
+
+            total_cache = int(
+                payload_cache[
+                    "total"
+                ]
+            )
+
+            primeiro_teste_cache = int(
+                payload_cache[
+                    "primeiro_teste"
+                ]
+            )
+
+            if (
+                total_cache
+                == total
+                and primeiro_teste_cache
+                == primeiro_teste
+            ):
+
+                return (
+                    casos,
+                    total,
+                    primeiro_teste,
+                )
+
+            print(
+                "Cache incompatível com "
+                "o intervalo atual."
+            )
 
     casos = {}
 
@@ -669,6 +789,25 @@ def preparar_casos():
                 f" | "
                 f"{time.time() - inicio:.1f}s"
             )
+            
+        if USAR_CACHE_CASOS:
+
+        salvar_cache_casos(
+            casos=
+                casos,
+
+            total=
+                total,
+
+            primeiro_teste=
+                primeiro_teste,
+
+            arquivos_dependencia=
+                arquivos_dependencia,
+
+            parametros=
+                parametros_cache,
+        )
 
     return (
         casos,
@@ -836,39 +975,27 @@ def analisar_intervalo(
     )
 
     print(
-        f"Treino curto: "
-        f"{inicio_teste - MEMORIA_CURTA}.."
-        f"{inicio_teste - 1}"
-    )
-
-    print(
-        f"Treino longo: "
-        f"{inicio_teste - MEMORIA_LONGA}.."
-        f"{inicio_teste - 1}"
-    )
-
-    modelo_curto = (
-        treinar_para_memoria(
-            casos,
-            inicio_teste,
-            MEMORIA_CURTA
-        )
-    )
-
-    modelo_longo = (
-        treinar_para_memoria(
-            casos,
-            inicio_teste,
-            MEMORIA_LONGA
-        )
+        "Modo: ROLLING POR CONCURSO"
     )
 
     resultados = []
     detalhe_posicoes = []
 
-    for indice in range(
-        inicio_teste,
+    total_concursos = (
         fim_teste
+        - inicio_teste
+    )
+
+    inicio_bloco = (
+        time.time()
+    )
+
+    for numero, indice in enumerate(
+        range(
+            inicio_teste,
+            fim_teste
+        ),
+        start=1
     ):
 
         caso = (
@@ -876,6 +1003,51 @@ def analisar_intervalo(
                 indice
             ]
         )
+
+        # ====================================================
+        # ROLLING REAL
+        #
+        # Para prever índice:
+        #
+        # curto:
+        # indice-6 .. indice-1
+        #
+        # longo:
+        # indice-94 .. indice-1
+        #
+        # Portanto os modelos são treinados NOVAMENTE
+        # para CADA concurso-alvo.
+        # ====================================================
+
+        modelo_curto = (
+            treinar_para_memoria(
+                casos=
+                    casos,
+
+                inicio_teste=
+                    indice,
+
+                tamanho=
+                    MEMORIA_CURTA
+            )
+        )
+
+        modelo_longo = (
+            treinar_para_memoria(
+                casos=
+                    casos,
+
+                inicio_teste=
+                    indice,
+
+                tamanho=
+                    MEMORIA_LONGA
+            )
+        )
+
+        # ====================================================
+        # RANKING CURTO
+        # ====================================================
 
         ranking_curto = (
             criar_ranking_custom(
@@ -902,6 +1074,10 @@ def analisar_intervalo(
             )
         )
 
+        # ====================================================
+        # RANKING LONGO
+        # ====================================================
+
         ranking_longo = (
             criar_ranking_custom(
                 modelo=
@@ -926,6 +1102,10 @@ def analisar_intervalo(
                     FEATURES_MULTIESCALA,
             )
         )
+
+        # ====================================================
+        # POSIÇÕES
+        # ====================================================
 
         pos_curto = {
             item["dezena"]:
@@ -966,6 +1146,9 @@ def analisar_intervalo(
                     caso[
                         "concurso"
                     ],
+
+                "indice":
+                    indice,
 
                 "dezena":
                     dezena,
@@ -1072,6 +1255,9 @@ def analisar_intervalo(
                         "concurso"
                     ],
 
+                "indice":
+                    indice,
+
                 "top":
                     top,
 
@@ -1106,11 +1292,34 @@ def analisar_intervalo(
                     acertos_somente_longo,
             })
 
+        # ====================================================
+        # PROGRESSO
+        # ====================================================
+
+        if (
+            numero == 1
+            or numero % 25 == 0
+            or numero == total_concursos
+        ):
+
+            print(
+                f"{numero:04d}/"
+                f"{total_concursos}"
+                f" | índice={indice}"
+                f" | curto="
+                f"{indice - MEMORIA_CURTA}.."
+                f"{indice - 1}"
+                f" | longo="
+                f"{indice - MEMORIA_LONGA}.."
+                f"{indice - 1}"
+                f" | tempo="
+                f"{time.time() - inicio_bloco:.1f}s"
+            )
+
     return (
         resultados,
         detalhe_posicoes
     )
-
 
 # ============================================================
 # ANALISAR BLOCO ANTIGO
