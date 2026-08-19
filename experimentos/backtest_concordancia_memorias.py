@@ -76,8 +76,27 @@ from config_ablation_v5 import (
 MEMORIA_CURTA = 6
 MEMORIA_LONGA = 94
 
+# ------------------------------------------------------------
+# HISTÓRICO COMPLETO
+#
+# True:
+# percorre todo o histórico possível
+#
+# False:
+# volta ao comportamento antigo:
+# últimos 4 blocos de 100
+# ------------------------------------------------------------
+
+USAR_HISTORICO_COMPLETO = True
+
+# Apenas para dividir o relatório temporal.
+# NÃO é tamanho de treino.
+TAMANHO_BLOCO_HISTORICO = 500
+
+# Config antiga, mantida para comparação futura.
 BLOCOS_TESTE = 4
 TAMANHO_BLOCO_TESTE = 100
+
 
 TOPS_ANALISADOS = [
     4,
@@ -111,7 +130,7 @@ FEATURES_MULTIESCALA = (
 ARQUIVO_SAIDA = (
     ROOT
     / "experimentos"
-    / "resultado_concordancia_memorias.xlsx"
+    / "resultado_concordancia_memorias_historico.xlsx"
 )
 
 
@@ -239,13 +258,36 @@ def preparar_dataset():
     )
 
     print("=" * 100)
-    print("BACKTEST - CONCORDÂNCIA ENTRE MEMÓRIA CURTA E LONGA")
+    print(
+        "BACKTEST - CONCORDÂNCIA ENTRE MEMÓRIA CURTA E LONGA"
+    )
     print("=" * 100)
+
+    print()
+    print(
+        f"Memória curta: {MEMORIA_CURTA}"
+    )
+
+    print(
+        f"Memória longa: {MEMORIA_LONGA}"
+    )
+
+    print(
+        f"Histórico completo: "
+        f"{USAR_HISTORICO_COMPLETO}"
+    )
+
+    print()
 
     df, df_bolas = (
         carregar_resultados(
             caminho_excel
         )
+    )
+
+    print(
+        f"Concursos carregados: "
+        f"{len(df_bolas)}"
     )
 
     (
@@ -348,6 +390,22 @@ def gerar_caso(
             mascara_teste
         ]
     )
+
+    if len(X_teste) != 25:
+
+        raise ValueError(
+            f"Índice {indice_alvo}: "
+            f"esperava 25 dezenas, "
+            f"recebi {len(X_teste)}."
+        )
+
+    if len(X_treino) == 0:
+
+        raise ValueError(
+            f"Índice {indice_alvo}: "
+            "não existem dados anteriores "
+            "para treinar V2."
+        )
 
     modelo_v2 = (
         criar_modelo_v2()
@@ -458,14 +516,37 @@ def preparar_casos():
         gerador.total_sorteios
     )
 
-    total_teste = (
-        BLOCOS_TESTE
-        * TAMANHO_BLOCO_TESTE
+    # --------------------------------------------------------
+    # Primeiro índice realmente disponível no dataset V2.
+    #
+    # Isso evita tentar gerar caso antes de existirem
+    # features V2 suficientes.
+    # --------------------------------------------------------
+
+    targets_disponiveis = np.sort(
+        np.unique(
+            indices_target
+        )
     )
 
-    primeiro_teste = (
-        total
-        - total_teste
+    if len(targets_disponiveis) < 2:
+        raise ValueError(
+            "Dataset V2 não possui targets suficientes "
+            "para iniciar o walk-forward."
+        )
+
+    # O primeiro target não pode ser usado como caso,
+    # porque não existe nenhum target V2 anterior para
+    # treinar o modelo V2.
+    #
+    # Portanto o primeiro caso walk-forward possível
+    # é o SEGUNDO target disponível.
+    primeiro_target_v2 = int(
+        targets_disponiveis[0]
+    )
+
+    primeiro_caso_v2 = int(
+        targets_disponiveis[1]
     )
 
     maior_memoria = max(
@@ -473,10 +554,71 @@ def preparar_casos():
         MEMORIA_LONGA
     )
 
-    primeiro_indice = (
-        primeiro_teste
-        - maior_memoria
+    if USAR_HISTORICO_COMPLETO:
+
+        # Precisamos gerar 94 casos anteriores para
+        # treinar o meta-modelo longo.
+        primeiro_indice = (
+            primeiro_caso_v2
+        )
+
+        primeiro_teste = (
+            primeiro_indice
+            + maior_memoria
+        )
+
+    else:
+
+        total_teste = (
+            BLOCOS_TESTE
+            * TAMANHO_BLOCO_TESTE
+        )
+
+        primeiro_teste = (
+            total
+            - total_teste
+        )
+
+        primeiro_indice = (
+            primeiro_teste
+            - maior_memoria
+        )
+
+        primeiro_indice = max(
+            primeiro_indice,
+            primeiro_target_v2
+        )
+
+    print()
+    print("=" * 100)
+    print("PREPARAÇÃO DOS CASOS")
+    print("=" * 100)
+
+    print(
+        f"Primeiro target V2: "
+        f"{primeiro_target_v2}"
     )
+
+    print(
+        f"Primeiro índice gerado: "
+        f"{primeiro_indice}"
+    )
+    
+    print(
+        f"Primeiro caso V2 válido: "
+        f"{primeiro_caso_v2}"
+    )
+
+    print(
+        f"Primeiro índice de teste: "
+        f"{primeiro_teste}"
+    )
+
+    print(
+        f"Último índice: "
+        f"{total - 1}"
+    )
+
 
     casos = {}
 
@@ -517,12 +659,12 @@ def preparar_casos():
 
         if (
             numero == 1
-            or numero % 10 == 0
+            or numero % 25 == 0
             or numero == len(indices)
         ):
 
             print(
-                f"{numero:03d}/"
+                f"{numero:04d}/"
                 f"{len(indices)}"
                 f" | "
                 f"{time.time() - inicio:.1f}s"
@@ -530,7 +672,8 @@ def preparar_casos():
 
     return (
         casos,
-        total
+        total,
+        primeiro_teste,
     )
 
 
@@ -636,6 +779,20 @@ def treinar_para_memoria(
         )
     )
 
+    faltantes = [
+        indice
+        for indice
+        in indices_meta
+        if indice not in casos
+    ]
+
+    if faltantes:
+
+        raise ValueError(
+            "Casos ausentes para treino: "
+            f"{faltantes[:10]}"
+        )
+
     (
         X_meta,
         y_meta
@@ -655,42 +812,39 @@ def treinar_para_memoria(
 
 
 # ============================================================
-# ANALISAR UM BLOCO
+# ANALISAR INTERVALO
 # ============================================================
 
-def analisar_bloco(
+def analisar_intervalo(
     bloco,
-    casos,
-    total
+    inicio_teste,
+    fim_teste,
+    casos
 ):
-
-    deslocamento = (
-        (
-            BLOCOS_TESTE
-            - bloco
-        )
-        * TAMANHO_BLOCO_TESTE
-    )
-
-    fim_teste = (
-        total
-        - deslocamento
-    )
-
-    inicio_teste = (
-        fim_teste
-        - TAMANHO_BLOCO_TESTE
-    )
 
     print()
     print("=" * 100)
-    print(f"BLOCO {bloco}")
+    print(
+        f"BLOCO {bloco}"
+    )
     print("=" * 100)
 
     print(
         f"Teste: "
         f"{inicio_teste}.."
         f"{fim_teste - 1}"
+    )
+
+    print(
+        f"Treino curto: "
+        f"{inicio_teste - MEMORIA_CURTA}.."
+        f"{inicio_teste - 1}"
+    )
+
+    print(
+        f"Treino longo: "
+        f"{inicio_teste - MEMORIA_LONGA}.."
+        f"{inicio_teste - 1}"
     )
 
     modelo_curto = (
@@ -710,12 +864,7 @@ def analisar_bloco(
     )
 
     resultados = []
-
     detalhe_posicoes = []
-
-    # ========================================================
-    # TESTE
-    # ========================================================
 
     for indice in range(
         inicio_teste,
@@ -837,7 +986,7 @@ def analisar_bloco(
                         in caso[
                             "nao_sorteadas"
                         ]
-                    )
+                    ),
             })
 
         # ====================================================
@@ -878,10 +1027,6 @@ def analisar_bloco(
                 longo
                 - curto
             )
-
-            # =================================================
-            # ACERTOS
-            # =================================================
 
             acertos_curto = len(
                 curto
@@ -968,6 +1113,51 @@ def analisar_bloco(
 
 
 # ============================================================
+# ANALISAR BLOCO ANTIGO
+# ============================================================
+
+def analisar_bloco(
+    bloco,
+    casos,
+    total
+):
+
+    deslocamento = (
+        (
+            BLOCOS_TESTE
+            - bloco
+        )
+        * TAMANHO_BLOCO_TESTE
+    )
+
+    fim_teste = (
+        total
+        - deslocamento
+    )
+
+    inicio_teste = (
+        fim_teste
+        - TAMANHO_BLOCO_TESTE
+    )
+
+    return (
+        analisar_intervalo(
+            bloco=
+                bloco,
+
+            inicio_teste=
+                inicio_teste,
+
+            fim_teste=
+                fim_teste,
+
+            casos=
+                casos,
+        )
+    )
+
+
+# ============================================================
 # EXECUTAR
 # ============================================================
 
@@ -975,38 +1165,124 @@ def executar():
 
     (
         casos,
-        total
+        total,
+        primeiro_teste,
     ) = (
         preparar_casos()
     )
 
     resultados = []
-
     detalhes = []
 
-    for bloco in range(
-        1,
-        BLOCOS_TESTE + 1
-    ):
+    if USAR_HISTORICO_COMPLETO:
 
-        (
-            resultado_bloco,
-            detalhe_bloco
-        ) = (
-            analisar_bloco(
-                bloco,
-                casos,
+        blocos = []
+
+        inicio = (
+            primeiro_teste
+        )
+
+        bloco = 1
+
+        while inicio < total:
+
+            fim = min(
+                inicio
+                + TAMANHO_BLOCO_HISTORICO,
                 total
             )
-        )
 
-        resultados.extend(
-            resultado_bloco
-        )
+            blocos.append({
+                "bloco":
+                    bloco,
 
-        detalhes.extend(
-            detalhe_bloco
-        )
+                "inicio":
+                    inicio,
+
+                "fim":
+                    fim,
+            })
+
+            inicio = (
+                fim
+            )
+
+            bloco += 1
+
+        print()
+        print("=" * 100)
+        print("BLOCOS DO HISTÓRICO")
+        print("=" * 100)
+
+        for item in blocos:
+
+            print(
+                f"Bloco "
+                f"{item['bloco']}: "
+                f"{item['inicio']}.."
+                f"{item['fim'] - 1}"
+            )
+
+        for item in blocos:
+
+            (
+                resultado_bloco,
+                detalhe_bloco
+            ) = (
+                analisar_intervalo(
+                    bloco=
+                        item[
+                            "bloco"
+                        ],
+
+                    inicio_teste=
+                        item[
+                            "inicio"
+                        ],
+
+                    fim_teste=
+                        item[
+                            "fim"
+                        ],
+
+                    casos=
+                        casos,
+                )
+            )
+
+            resultados.extend(
+                resultado_bloco
+            )
+
+            detalhes.extend(
+                detalhe_bloco
+            )
+
+    else:
+
+        for bloco in range(
+            1,
+            BLOCOS_TESTE + 1
+        ):
+
+            (
+                resultado_bloco,
+                detalhe_bloco
+            ) = (
+                analisar_bloco(
+                    bloco,
+                    casos,
+                    total
+                )
+            )
+
+            resultados.extend(
+                resultado_bloco
+            )
+
+            detalhes.extend(
+                detalhe_bloco
+            )
 
     return (
         pd.DataFrame(
@@ -1015,7 +1291,7 @@ def executar():
 
         pd.DataFrame(
             detalhes
-        )
+        ),
     )
 
 
@@ -1180,7 +1456,7 @@ def gerar_resumo_blocos(
         .groupby(
             [
                 "bloco",
-                "top"
+                "top",
             ]
         )
     ):
@@ -1213,6 +1489,11 @@ def gerar_resumo_blocos(
             "top":
                 top,
 
+            "concursos":
+                len(
+                    dados
+                ),
+
             "media_qtd_consenso":
                 dados[
                     "qtd_consenso"
@@ -1224,7 +1505,8 @@ def gerar_resumo_blocos(
 
             "lift_vs_40":
                 (
-                    precisao - 0.40
+                    precisao
+                    - 0.40
                 )
                 if not np.isnan(
                     precisao
@@ -1237,6 +1519,501 @@ def gerar_resumo_blocos(
             linhas
         )
     )
+
+
+# ============================================================
+# FORÇA POR POSIÇÃO CURTO x LONGO
+# ============================================================
+
+def gerar_forca_posicoes(
+    detalhes,
+    top_maximo=6
+):
+
+    dados = (
+        detalhes[
+            (
+                detalhes[
+                    "rank_curto"
+                ]
+                <= top_maximo
+            )
+            &
+            (
+                detalhes[
+                    "rank_longo"
+                ]
+                <= top_maximo
+            )
+        ]
+        .copy()
+    )
+
+    resumo = (
+        dados
+        .groupby(
+            [
+                "rank_curto",
+                "rank_longo",
+            ],
+            as_index=False
+        )
+        .agg(
+            ocorrencias=(
+                "nao_saiu",
+                "count"
+            ),
+
+            acertos=(
+                "nao_saiu",
+                "sum"
+            ),
+
+            precisao=(
+                "nao_saiu",
+                "mean"
+            ),
+        )
+    )
+
+    resumo[
+        "lift_vs_40"
+    ] = (
+        resumo[
+            "precisao"
+        ]
+        - 0.40
+    )
+
+    resumo[
+        "lift_percentual_vs_40"
+    ] = (
+        (
+            resumo[
+                "precisao"
+            ]
+            / 0.40
+        )
+        - 1
+    ) * 100
+
+    resumo[
+        "soma_ranks"
+    ] = (
+        resumo[
+            "rank_curto"
+        ]
+        + resumo[
+            "rank_longo"
+        ]
+    )
+
+    resumo[
+        "maior_rank"
+    ] = (
+        resumo[
+            [
+                "rank_curto",
+                "rank_longo",
+            ]
+        ]
+        .max(
+            axis=1
+        )
+    )
+
+    return (
+        resumo
+        .sort_values(
+            [
+                "precisao",
+                "ocorrencias",
+            ],
+            ascending=[
+                False,
+                False,
+            ]
+        )
+    )
+
+
+# ============================================================
+# FORÇA POR POSIÇÃO E BLOCO
+# ============================================================
+
+def gerar_forca_posicoes_blocos(
+    detalhes,
+    top_maximo=6
+):
+
+    dados = (
+        detalhes[
+            (
+                detalhes[
+                    "rank_curto"
+                ]
+                <= top_maximo
+            )
+            &
+            (
+                detalhes[
+                    "rank_longo"
+                ]
+                <= top_maximo
+            )
+        ]
+        .copy()
+    )
+
+    resumo = (
+        dados
+        .groupby(
+            [
+                "bloco",
+                "rank_curto",
+                "rank_longo",
+            ],
+            as_index=False
+        )
+        .agg(
+            ocorrencias=(
+                "nao_saiu",
+                "count"
+            ),
+
+            acertos=(
+                "nao_saiu",
+                "sum"
+            ),
+
+            precisao=(
+                "nao_saiu",
+                "mean"
+            ),
+        )
+    )
+
+    resumo[
+        "lift_vs_40"
+    ] = (
+        resumo[
+            "precisao"
+        ]
+        - 0.40
+    )
+
+    return resumo
+
+
+# ============================================================
+# CONSENSO POR QUANTIDADE
+# ============================================================
+
+def gerar_consenso_por_quantidade(
+    resultados,
+    top=4
+):
+
+    dados = (
+        resultados[
+            resultados[
+                "top"
+            ]
+            == top
+        ]
+        .copy()
+    )
+
+    linhas = []
+
+    for qtd_consenso, grupo in (
+        dados.groupby(
+            "qtd_consenso"
+        )
+    ):
+
+        concursos = (
+            len(
+                grupo
+            )
+        )
+
+        total_dezenas = (
+            grupo[
+                "qtd_consenso"
+            ]
+            .sum()
+        )
+
+        acertos = (
+            grupo[
+                "acertos_consenso"
+            ]
+            .sum()
+        )
+
+        precisao = (
+            acertos
+            / total_dezenas
+            if total_dezenas > 0
+            else np.nan
+        )
+
+        linhas.append({
+            "top":
+                top,
+
+            "qtd_consenso":
+                int(
+                    qtd_consenso
+                ),
+
+            "concursos":
+                concursos,
+
+            "percentual_concursos":
+                (
+                    concursos
+                    / len(
+                        dados
+                    )
+                ),
+
+            "total_dezenas_consenso":
+                int(
+                    total_dezenas
+                ),
+
+            "acertos":
+                int(
+                    acertos
+                ),
+
+            "precisao":
+                precisao,
+
+            "lift_vs_40":
+                (
+                    precisao
+                    - 0.40
+                    if not np.isnan(
+                        precisao
+                    )
+                    else np.nan
+                ),
+
+            "lift_percentual_vs_40":
+                (
+                    (
+                        precisao
+                        / 0.40
+                        - 1
+                    )
+                    * 100
+                    if not np.isnan(
+                        precisao
+                    )
+                    else np.nan
+                ),
+        })
+
+    return (
+        pd.DataFrame(
+            linhas
+        )
+        .sort_values(
+            "qtd_consenso"
+        )
+    )
+
+
+# ============================================================
+# CONSENSO POR QUANTIDADE E BLOCO
+# ============================================================
+
+def gerar_consenso_quantidade_blocos(
+    resultados,
+    top=4
+):
+
+    dados = (
+        resultados[
+            resultados[
+                "top"
+            ]
+            == top
+        ]
+        .copy()
+    )
+
+    linhas = []
+
+    for (
+        bloco,
+        qtd_consenso
+    ), grupo in (
+        dados.groupby(
+            [
+                "bloco",
+                "qtd_consenso",
+            ]
+        )
+    ):
+
+        total_dezenas = (
+            grupo[
+                "qtd_consenso"
+            ]
+            .sum()
+        )
+
+        acertos = (
+            grupo[
+                "acertos_consenso"
+            ]
+            .sum()
+        )
+
+        precisao = (
+            acertos
+            / total_dezenas
+            if total_dezenas > 0
+            else np.nan
+        )
+
+        linhas.append({
+            "bloco":
+                bloco,
+
+            "top":
+                top,
+
+            "qtd_consenso":
+                int(
+                    qtd_consenso
+                ),
+
+            "concursos":
+                len(
+                    grupo
+                ),
+
+            "total_dezenas_consenso":
+                int(
+                    total_dezenas
+                ),
+
+            "acertos":
+                int(
+                    acertos
+                ),
+
+            "precisao":
+                precisao,
+
+            "lift_vs_40":
+                (
+                    precisao
+                    - 0.40
+                    if not np.isnan(
+                        precisao
+                    )
+                    else np.nan
+                ),
+        })
+
+    return (
+        pd.DataFrame(
+            linhas
+        )
+    )
+
+
+# ============================================================
+# FORÇA POR SOMA DOS RANKS
+# ============================================================
+
+def gerar_forca_soma_ranks(
+    detalhes,
+    top_maximo=6
+):
+
+    dados = (
+        detalhes[
+            (
+                detalhes[
+                    "rank_curto"
+                ]
+                <= top_maximo
+            )
+            &
+            (
+                detalhes[
+                    "rank_longo"
+                ]
+                <= top_maximo
+            )
+        ]
+        .copy()
+    )
+
+    dados[
+        "soma_ranks"
+    ] = (
+        dados[
+            "rank_curto"
+        ]
+        + dados[
+            "rank_longo"
+        ]
+    )
+
+    resumo = (
+        dados
+        .groupby(
+            "soma_ranks",
+            as_index=False
+        )
+        .agg(
+            ocorrencias=(
+                "nao_saiu",
+                "count"
+            ),
+
+            acertos=(
+                "nao_saiu",
+                "sum"
+            ),
+
+            precisao=(
+                "nao_saiu",
+                "mean"
+            ),
+        )
+    )
+
+    resumo[
+        "lift_vs_40"
+    ] = (
+        resumo[
+            "precisao"
+        ]
+        - 0.40
+    )
+
+    resumo[
+        "lift_percentual_vs_40"
+    ] = (
+        (
+            resumo[
+                "precisao"
+            ]
+            / 0.40
+        )
+        - 1
+    ) * 100
+
+    return resumo
 
 
 # ============================================================
@@ -1268,9 +2045,64 @@ def main():
         )
     )
 
+    forca_posicoes = (
+        gerar_forca_posicoes(
+            detalhes,
+            top_maximo=6
+        )
+    )
+
+    forca_posicoes_blocos = (
+        gerar_forca_posicoes_blocos(
+            detalhes,
+            top_maximo=6
+        )
+    )
+
+    consenso_qtd_top4 = (
+        gerar_consenso_por_quantidade(
+            resultados,
+            top=4
+        )
+    )
+
+    consenso_qtd_top5 = (
+        gerar_consenso_por_quantidade(
+            resultados,
+            top=5
+        )
+    )
+
+    consenso_qtd_top6 = (
+        gerar_consenso_por_quantidade(
+            resultados,
+            top=6
+        )
+    )
+
+    consenso_qtd_blocos = (
+        gerar_consenso_quantidade_blocos(
+            resultados,
+            top=4
+        )
+    )
+
+    forca_soma_ranks = (
+        gerar_forca_soma_ranks(
+            detalhes,
+            top_maximo=6
+        )
+    )
+
+    # ========================================================
+    # PRINT
+    # ========================================================
+
     print()
     print("=" * 120)
-    print("CONCORDÂNCIA CURTO x LONGO")
+    print(
+        "CONCORDÂNCIA CURTO x LONGO"
+    )
     print("=" * 120)
 
     print(
@@ -1283,7 +2115,9 @@ def main():
 
     print()
     print("=" * 120)
-    print("CONSENSO POR BLOCO")
+    print(
+        "CONSENSO POR BLOCO"
+    )
     print("=" * 120)
 
     print(
@@ -1293,6 +2127,56 @@ def main():
             index=False
         )
     )
+
+    print()
+    print("=" * 120)
+    print(
+        "FORÇA POR POSIÇÃO CURTO x LONGO"
+    )
+    print("=" * 120)
+
+    print(
+        forca_posicoes
+        .head(40)
+        .round(4)
+        .to_string(
+            index=False
+        )
+    )
+
+    print()
+    print("=" * 120)
+    print(
+        "CONSENSO POR QUANTIDADE - TOP 4"
+    )
+    print("=" * 120)
+
+    print(
+        consenso_qtd_top4
+        .round(4)
+        .to_string(
+            index=False
+        )
+    )
+
+    print()
+    print("=" * 120)
+    print(
+        "FORÇA POR SOMA DOS RANKS"
+    )
+    print("=" * 120)
+
+    print(
+        forca_soma_ranks
+        .round(4)
+        .to_string(
+            index=False
+        )
+    )
+
+    # ========================================================
+    # EXCEL
+    # ========================================================
 
     with pd.ExcelWriter(
         ARQUIVO_SAIDA,
@@ -1311,6 +2195,48 @@ def main():
             index=False
         )
 
+        forca_posicoes.to_excel(
+            writer,
+            sheet_name="Forca_Posicoes",
+            index=False
+        )
+
+        forca_posicoes_blocos.to_excel(
+            writer,
+            sheet_name="Forca_Pos_Blocos",
+            index=False
+        )
+
+        consenso_qtd_top4.to_excel(
+            writer,
+            sheet_name="Qtd_Consenso_Top4",
+            index=False
+        )
+
+        consenso_qtd_top5.to_excel(
+            writer,
+            sheet_name="Qtd_Consenso_Top5",
+            index=False
+        )
+
+        consenso_qtd_top6.to_excel(
+            writer,
+            sheet_name="Qtd_Consenso_Top6",
+            index=False
+        )
+
+        consenso_qtd_blocos.to_excel(
+            writer,
+            sheet_name="Qtd_Cons_Blocos",
+            index=False
+        )
+
+        forca_soma_ranks.to_excel(
+            writer,
+            sheet_name="Forca_Soma_Ranks",
+            index=False
+        )
+
         resultados.to_excel(
             writer,
             sheet_name="Concursos",
@@ -1324,6 +2250,8 @@ def main():
         )
 
     print()
+    print("=" * 120)
+
     print(
         f"Arquivo:"
     )
@@ -1333,10 +2261,23 @@ def main():
     )
 
     print()
+
+    print(
+        f"Concursos analisados: "
+        f"{resultados['concurso'].nunique()}"
+    )
+
+    print(
+        f"Registros de posições: "
+        f"{len(detalhes)}"
+    )
+
     print(
         f"Tempo total: "
         f"{time.time() - inicio:.1f}s"
     )
+
+    print("=" * 120)
 
 
 if __name__ == "__main__":
